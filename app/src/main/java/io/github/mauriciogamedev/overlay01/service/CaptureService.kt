@@ -56,6 +56,9 @@ class CaptureService : Service() {
 
         val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, ActivityResultCodes.INVALID)
         val resultData = intent.readProjectionData()
+        val overlayUrl = intent.getStringExtra(EXTRA_OVERLAY_URL)
+            ?.trim()
+            ?.takeIf { it.startsWith("https://") || it.startsWith("http://") }
 
         if (resultCode == ActivityResultCodes.INVALID || resultData == null) {
             stopSelf()
@@ -72,10 +75,12 @@ class CaptureService : Service() {
 
         val spec = resolveCaptureSpec()
         captureEngine = ScreenCaptureEngine(
+            context = applicationContext,
             projection = projection,
             initialWidth = spec.width,
             initialHeight = spec.height,
             densityDpi = spec.densityDpi,
+            overlayUrl = overlayUrl,
             onError = {
                 mainHandler.post { stopProjection() }
             }
@@ -161,7 +166,7 @@ class CaptureService : Service() {
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.presence_video_online)
             .setContentTitle("Overlay01")
-            .setContentText("GPU screen capture is active")
+            .setContentText("9:16 GPU capture + URL overlay active")
             .setContentIntent(openAppIntent)
             .setOngoing(true)
             .addAction(Notification.Action.Builder(null, "Stop", stopIntent).build())
@@ -203,6 +208,7 @@ class CaptureService : Service() {
         const val ACTION_STOP = "io.github.mauriciogamedev.overlay01.action.STOP_CAPTURE"
         const val EXTRA_RESULT_CODE = "projection_result_code"
         const val EXTRA_RESULT_DATA = "projection_result_data"
+        const val EXTRA_OVERLAY_URL = "overlay_url"
 
         private const val CHANNEL_ID = "overlay01_capture"
         private const val NOTIFICATION_ID = 1001
