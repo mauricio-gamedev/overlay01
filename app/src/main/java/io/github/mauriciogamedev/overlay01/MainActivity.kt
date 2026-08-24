@@ -12,6 +12,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -23,6 +24,12 @@ class MainActivity : Activity() {
     private lateinit var overlayUrl: EditText
     private lateinit var overlayPreview: WebView
     private lateinit var statusText: TextView
+    private lateinit var loadButton: Button
+    private lateinit var lockOverlay: CheckBox
+
+    private val preferences by lazy {
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    }
 
     private val mediaProjectionManager by lazy {
         getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -50,7 +57,7 @@ class MainActivity : Activity() {
         }
 
         statusText = TextView(this).apply {
-            text = "Stage 1 · overlay URL + capture session"
+            text = "Stage 2 · GPU capture + overlay URL"
             setTextColor(Color.LTGRAY)
         }
 
@@ -59,11 +66,22 @@ class MainActivity : Activity() {
             setSingleLine(true)
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
+            setText(preferences.getString(PREF_OVERLAY_URL, ""))
         }
 
-        val loadButton = Button(this).apply {
+        loadButton = Button(this).apply {
             text = "Load overlay"
             setOnClickListener { loadOverlay() }
+        }
+
+        lockOverlay = CheckBox(this).apply {
+            text = "Fix overlay (lock editing)"
+            setTextColor(Color.WHITE)
+            isChecked = preferences.getBoolean(PREF_OVERLAY_LOCKED, false)
+            setOnCheckedChangeListener { _, checked ->
+                preferences.edit().putBoolean(PREF_OVERLAY_LOCKED, checked).apply()
+                applyOverlayLock(checked, announce = true)
+            }
         }
 
         val captureButton = Button(this).apply {
@@ -104,6 +122,7 @@ class MainActivity : Activity() {
         root.addView(statusText)
         root.addView(overlayUrl)
         root.addView(loadButton)
+        root.addView(lockOverlay)
         root.addView(captureButton)
         root.addView(stopButton)
         root.addView(
@@ -115,10 +134,27 @@ class MainActivity : Activity() {
             )
         )
 
+        applyOverlayLock(lockOverlay.isChecked, announce = false)
+
         return root
     }
 
+    private fun applyOverlayLock(locked: Boolean, announce: Boolean) {
+        overlayUrl.isEnabled = !locked
+        loadButton.isEnabled = !locked
+
+        if (announce) {
+            statusText.text = if (locked) {
+                "Overlay fixed · editing locked"
+            } else {
+                "Overlay unlocked · editing enabled"
+            }
+        }
+    }
+
     private fun loadOverlay() {
+        if (lockOverlay.isChecked) return
+
         val raw = overlayUrl.text.toString().trim()
         val parsed = runCatching { Uri.parse(raw) }.getOrNull()
         val scheme = parsed?.scheme?.lowercase()
@@ -128,6 +164,7 @@ class MainActivity : Activity() {
             return
         }
 
+        preferences.edit().putString(PREF_OVERLAY_URL, raw).apply()
         overlayPreview.loadUrl(raw)
         statusText.text = "Overlay loaded"
     }
@@ -159,5 +196,8 @@ class MainActivity : Activity() {
 
     private companion object {
         const val REQUEST_CAPTURE = 1001
+        const val PREFS_NAME = "overlay01_settings"
+        const val PREF_OVERLAY_URL = "overlay_url"
+        const val PREF_OVERLAY_LOCKED = "overlay_locked"
     }
 }
