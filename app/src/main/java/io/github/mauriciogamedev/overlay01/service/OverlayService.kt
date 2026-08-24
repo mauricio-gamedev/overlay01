@@ -46,7 +46,6 @@ class OverlayService : Service() {
 
     private val slots = arrayOf(SlotRuntime(1), SlotRuntime(2))
     private var overlayRoot: FrameLayout? = null
-    private var explicitStop = false
 
     override fun onCreate() {
         super.onCreate()
@@ -56,7 +55,6 @@ class OverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            explicitStop = true
             preferences.edit()
                 .putBoolean(prefEnabled(1), false)
                 .putBoolean(prefEnabled(2), false)
@@ -82,7 +80,6 @@ class OverlayService : Service() {
             return START_NOT_STICKY
         }
 
-        explicitStop = false
         startOverlayForeground()
         ensureOverlayRoot()
 
@@ -96,6 +93,7 @@ class OverlayService : Service() {
             }
         }
 
+        enforceLayerOrder()
         updateNotification(activeConfigs.size)
         return START_STICKY
     }
@@ -298,10 +296,17 @@ class OverlayService : Service() {
             if (config?.enabled == true && Settings.canDrawOverlays(this)) {
                 ensureOverlayRoot()
                 syncSlot(config)
+                enforceLayerOrder()
             }
         }
         slot.restartRunnable = runnable
         mainHandler.postDelayed(runnable, RENDERER_RESTART_DELAY_MS)
+    }
+
+    private fun enforceLayerOrder() {
+        val root = overlayRoot ?: return
+        slots[0].view?.let(root::bringChildToFront)
+        slots[1].view?.let(root::bringChildToFront)
     }
 
     private fun applyTransform(view: WebView, slot: SlotRuntime) {
