@@ -6,13 +6,35 @@ Overlay01 is a lightweight Android streaming app focused on gameplay capture and
 
 Build a stable, low-overhead pipeline for vertical mobile livestreams:
 
-`MediaProjection -> GPU compositor -> Web overlays -> MediaCodec -> RTMP/RTMPS`
+`MediaProjection -> GPU compositor -> Web overlay -> MediaCodec -> RTMP/RTMPS`
 
-The project intentionally starts small. Stability, low memory usage and recoverability are higher priorities than adding many features.
+The project intentionally stays small. Stability, low memory usage and recoverability have priority over feature count.
 
 ## Core rule: never block game input
 
-Overlay01 does not place a `TYPE_APPLICATION_OVERLAY` window over the game. Web overlays are composited off-screen into the outgoing video frame instead. This keeps the captured game responsible for its own touch input, even when the user's finger passes over the visual position where an overlay appears in the livestream.
+Overlay01 does not place a `TYPE_APPLICATION_OVERLAY` window over the game. The URL overlay is rendered on a private off-screen display and composited only into the outgoing video frame. The game therefore keeps ownership of touch input even when the user's finger passes over the visual position of the overlay in the livestream.
+
+## v0.1 pipeline
+
+- Native Android UI with no Compose dependency
+- One HTTP/HTTPS overlay URL with hardware WebView rendering
+- Persistent overlay URL and `Fix overlay` lock
+- MediaProjection screen capture through a real `VirtualDisplay`
+- Gameplay frames consumed directly as an external OpenGL ES texture
+- Private off-screen WebView rendered as a second external OpenGL texture
+- 720x1280 (9:16) GPU compositor with game aspect ratio preserved
+- Premultiplied-alpha URL overlay composition
+- No Bitmap/frame copy through the CPU in the gameplay video path
+- MediaCodec H.264 hardware Surface encoder
+- 720x1280, 30 FPS, 3 Mbps video baseline
+- MediaCodec AAC-LC audio at 44.1 kHz mono / 128 kbps
+- Android playback capture for game audio when the target app permits it
+- Microphone mode and microphone fallback path
+- RTMP/RTMPS publishing through RootEncoder's mature RTMP transport
+- Basic reconnect attempts and forced H.264 keyframe after reconnect
+- Foreground service lifecycle with Stop action
+- Synchronized OpenGL shutdown before releasing the encoder Surface
+- Video timestamps normalized from zero for A/V synchronization
 
 ## Milestones
 
@@ -21,45 +43,30 @@ Overlay01 does not place a `TYPE_APPLICATION_OVERLAY` window over the game. Web 
 - [x] MediaProjection capture session
 - [x] GPU compositor
 - [x] URL overlay engine
-- [ ] Hardware video encoding
-- [ ] RTMP/RTMPS publishing
-- [ ] Live foreground service hardening
-- [ ] Saved overlay layouts
+- [x] Hardware H.264 video encoding
+- [x] AAC audio capture/encoding
+- [x] RTMP/RTMPS publishing
+- [x] Live foreground service wiring
+- [x] Single overlay URL persistence + lock
+- [x] Debug APK compiles in GitHub Actions
+- [ ] Physical-device live validation and tuning
 
-## Initial architecture
+## Build validation
 
-- `capture`: screen-capture lifecycle and MediaProjection
-- `overlay`: URL/web overlay models and lifecycle
-- `render`: compositor and GPU-facing rendering code
-- `encode`: MediaCodec video/audio encoding
-- `stream`: RTMP/RTMPS transport
-- `service`: foreground live-session lifetime
-- `ui`: thin configuration and preview layer
+The current v0.1 `main` code was validated by the repository's `Android Debug APK` GitHub Actions workflow on 2026-08-24. `:app:assembleDebug` and artifact upload completed successfully.
 
-## Current Stage 4 baseline
+Build configuration:
 
-- Native Android app with no Compose dependency
-- URL overlay preview through a hardware-accelerated WebView
-- JavaScript and DOM storage enabled for interactive overlay pages
-- Overlay URL persisted locally after a successful load
-- Persistent `Fix overlay` control that locks overlay editing and restores after reopening the app
-- Saved overlay automatically restored in the preview
-- MediaProjection permission flow wired from the activity
-- Dedicated `mediaProjection` foreground service lifecycle
-- Real `VirtualDisplay` capture session
-- Screen frames consumed directly by an external OpenGL ES texture
-- No Bitmap/frame copy through the CPU in the gameplay capture path
-- Capture runs on its own `HandlerThread`
-- Captured-content resize support for orientation/size changes
-- No system overlay window, so gameplay touches are not intercepted by Overlay01
-- Fixed 720x1280 (9:16) GPU composition canvas
-- Game aspect ratio preserved with no stretching
-- URL WebView rendered on a private off-screen virtual display
-- Web overlay consumed as a second external OpenGL texture
-- Premultiplied-alpha blend pass composites the URL overlay over the game
-- Overlay failure is isolated and does not intentionally tear down gameplay capture
-- Debug APK workflow prepared for GitHub Actions
+- `minSdk 26`
+- `targetSdk 36`
+- `compileSdk 37`
+- H.264: 720x1280 / 30 FPS / 3 Mbps
+- AAC: 44.1 kHz / mono / 128 kbps
 
-## Status
+## Audio note
 
-Stage 4 URL overlay pipeline created. Next: connect the 720x1280 compositor to a hardware `MediaCodec` H.264 input surface and produce real encoded video frames before adding RTMP/RTMPS transport.
+Android playback capture is permission- and app-policy-dependent. Some games/apps prohibit their internal audio from being captured. Overlay01 also supports microphone capture so the live can still use an audio source when internal playback capture is unavailable.
+
+## Current status
+
+v0.1 core pipeline is implemented and build-validated. The next checkpoint is a real-device live test to measure stability, thermals, dropped frames, overlay refresh behavior, game-audio compatibility and RTMP behavior under network changes.
