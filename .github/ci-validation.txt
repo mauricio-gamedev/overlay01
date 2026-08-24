@@ -1,1 +1,2 @@
 Temporary PR marker used only to trigger the Android debug build for v0.1 validation.
+Validation pass: compileSdk 37 + MediaProjection nullability + synchronized GPU shutdown.
