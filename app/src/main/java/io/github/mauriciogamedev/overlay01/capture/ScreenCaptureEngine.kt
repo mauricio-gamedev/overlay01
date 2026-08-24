@@ -14,15 +14,15 @@ import android.opengl.GLES20
 import android.os.Handler
 import android.os.HandlerThread
 import android.view.Surface
+import io.github.mauriciogamedev.overlay01.render.VerticalCompositor
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Captures the device display directly into an external OpenGL texture.
  *
- * No application-overlay window is created. The captured texture is intended to
- * be composited off-screen with web overlays before encoding, so touches remain
- * owned by the game/app being captured.
+ * No application-overlay window is created. The captured texture is composited
+ * off-screen into a vertical 9:16 canvas, so touches remain owned by the game.
  */
 class ScreenCaptureEngine(
     private val projection: MediaProjection,
@@ -40,6 +40,7 @@ class ScreenCaptureEngine(
 
     private val running = AtomicBoolean(false)
     private val frames = AtomicLong(0L)
+    private val textureTransform = FloatArray(16)
 
     private var thread: HandlerThread? = null
     private var handler: Handler? = null
@@ -52,6 +53,7 @@ class ScreenCaptureEngine(
     private var surfaceTexture: SurfaceTexture? = null
     private var inputSurface: Surface? = null
     private var virtualDisplay: VirtualDisplay? = null
+    private var compositor: VerticalCompositor? = null
 
     val frameCount: Long
         get() = frames.get()
@@ -68,6 +70,10 @@ class ScreenCaptureEngine(
         captureHandler.post {
             try {
                 initializeGl()
+                compositor = VerticalCompositor(
+                    outputWidth = OUTPUT_WIDTH,
+                    outputHeight = OUTPUT_HEIGHT
+                ).also { it.initialize() }
                 createCaptureSurface()
                 createVirtualDisplay(captureHandler)
             } catch (error: Throwable) {
@@ -155,8 +161,8 @@ class ScreenCaptureEngine(
         eglContext = context
 
         val pbufferAttributes = intArrayOf(
-            EGL14.EGL_WIDTH, 1,
-            EGL14.EGL_HEIGHT, 1,
+            EGL14.EGL_WIDTH, OUTPUT_WIDTH,
+            EGL14.EGL_HEIGHT, OUTPUT_HEIGHT,
             EGL14.EGL_NONE
         )
         val pbuffer = EGL14.eglCreatePbufferSurface(
@@ -207,6 +213,14 @@ class ScreenCaptureEngine(
                 if (!running.get()) return@setOnFrameAvailableListener
                 try {
                     texture.updateTexImage()
+                    texture.getTransformMatrix(textureTransform)
+                    compositor?.render(
+                        externalTextureId = textureId,
+                        textureTransform = textureTransform,
+                        sourceWidth = width,
+                        sourceHeight = height
+                    )
+                    GLES20.glFlush()
                     frames.incrementAndGet()
                 } catch (error: Throwable) {
                     if (running.get()) onError(error)
@@ -243,6 +257,9 @@ class ScreenCaptureEngine(
         runCatching { surfaceTexture?.release() }
         surfaceTexture = null
 
+        runCatching { compositor?.release() }
+        compositor = null
+
         if (textureId != 0) {
             runCatching { GLES20.glDeleteTextures(1, intArrayOf(textureId), 0) }
             textureId = 0
@@ -271,5 +288,10 @@ class ScreenCaptureEngine(
         eglDisplay = EGL14.EGL_NO_DISPLAY
         handler = null
         thread = null
+    }
+
+    companion object {
+        const val OUTPUT_WIDTH = 720
+        const val OUTPUT_HEIGHT = 1280
     }
 }
