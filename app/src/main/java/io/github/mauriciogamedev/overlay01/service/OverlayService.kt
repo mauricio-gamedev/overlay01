@@ -35,6 +35,7 @@ class OverlayService : Service() {
 
     private var overlayView: WebView? = null
     private var currentUrl: String? = null
+    private var currentScalePercent = DEFAULT_SCALE_PERCENT
     private var explicitStop = false
 
     override fun onCreate() {
@@ -44,15 +45,13 @@ class OverlayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> {
-                explicitStop = true
-                preferences.edit().putBoolean(PREF_VISIBLE, false).apply()
-                removeOverlay()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-                return START_NOT_STICKY
-            }
+        if (intent?.action == ACTION_STOP) {
+            explicitStop = true
+            preferences.edit().putBoolean(PREF_VISIBLE, false).apply()
+            removeOverlay()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
         }
 
         val requestedUrl = intent?.getStringExtra(EXTRA_URL)
@@ -64,8 +63,17 @@ class OverlayService : Service() {
             ?.takeIf(::isSupportedUrl)
 
         val url = requestedUrl ?: savedUrl
+        val requestedScale = intent?.takeIf { it.hasExtra(EXTRA_SCALE_PERCENT) }
+            ?.getIntExtra(EXTRA_SCALE_PERCENT, DEFAULT_SCALE_PERCENT)
+        val savedScale = preferences.getInt(PREF_SCALE_PERCENT, DEFAULT_SCALE_PERCENT)
+        val scalePercent = (requestedScale ?: savedScale)
+            .coerceIn(MIN_SCALE_PERCENT, MAX_SCALE_PERCENT)
+
         val shouldRestore = intent == null && preferences.getBoolean(PREF_VISIBLE, false)
-        val shouldShow = intent?.action == ACTION_SHOW || intent?.action == ACTION_UPDATE || shouldRestore
+        val shouldShow = intent?.action == ACTION_SHOW ||
+            intent?.action == ACTION_UPDATE ||
+            intent?.action == ACTION_RESIZE ||
+            shouldRestore
 
         if (!shouldShow || url == null || !Settings.canDrawOverlays(this)) {
             stopSelf()
@@ -73,13 +81,15 @@ class OverlayService : Service() {
         }
 
         explicitStop = false
+        currentScalePercent = scalePercent
         preferences.edit()
             .putString(PREF_URL, url)
+            .putInt(PREF_SCALE_PERCENT, scalePercent)
             .putBoolean(PREF_VISIBLE, true)
             .apply()
 
         startOverlayForeground()
-        showOrUpdateOverlay(url)
+        showOrUpdateOverlay(url, scalePercent)
         return START_STICKY
     }
 
@@ -93,15 +103,17 @@ class OverlayService : Service() {
         super.onDestroy()
     }
 
-    private fun showOrUpdateOverlay(url: String) {
-        if (currentUrl == url && overlayView != null) {
-            overlayView?.reload()
-            updateNotification("Overlay ativa · layout atualizado")
+    private fun showOrUpdateOverlay(url: String, scalePercent: Int) {
+        val currentView = overlayView
+        if (currentUrl == url && currentView != null) {
+            applyScale(currentView, scalePercent)
+            updateNotification("Overlay ativa · tamanho ${scalePercent}%")
             return
         }
 
         removeOverlay()
         currentUrl = url
+        currentScalePercent = scalePercent
 
         val themedContext = ContextThemeWrapper(
             this,
@@ -155,6 +167,7 @@ class OverlayService : Service() {
                         "})()",
                         null
                     )
+                    applyScale(view, currentScalePercent)
                     updateNotification("Overlay ativa · toque livre no jogo")
                 }
 
@@ -168,9 +181,10 @@ class OverlayService : Service() {
                         runCatching { view.destroy() }
 
                         val urlToRestore = currentUrl
+                        val scaleToRestore = currentScalePercent
                         if (urlToRestore != null && preferences.getBoolean(PREF_VISIBLE, false)) {
                             mainHandler.postDelayed(
-                                { showOrUpdateOverlay(urlToRestore) },
+                                { showOrUpdateOverlay(urlToRestore, scaleToRestore) },
                                 RENDERER_RESTART_DELAY_MS
                             )
                         }
@@ -203,6 +217,7 @@ class OverlayService : Service() {
         try {
             windowManager.addView(webView, params)
             overlayView = webView
+            applyScale(webView, scalePercent)
             webView.loadUrl(url)
         } catch (error: Throwable) {
             runCatching { webView.destroy() }
@@ -212,6 +227,13 @@ class OverlayService : Service() {
             updateNotification("Falha ao abrir overlay")
             stopSelf()
         }
+    }
+
+    private fun applyScale(view: WebView, scalePercent: Int) {
+        val scale = scalePercent.coerceIn(MIN_SCALE_PERCENT, MAX_SCALE_PERCENT) / 100f
+        if (view.scaleX == scale && view.scaleY == scale) return
+        view.scaleX = scale
+        view.scaleY = scale
     }
 
     private fun removeOverlay() {
@@ -293,13 +315,20 @@ class OverlayService : Service() {
     companion object {
         const val ACTION_SHOW = "io.github.mauriciogamedev.overlay01.action.SHOW_OVERLAY"
         const val ACTION_UPDATE = "io.github.mauriciogamedev.overlay01.action.UPDATE_OVERLAY"
+        const val ACTION_RESIZE = "io.github.mauriciogamedev.overlay01.action.RESIZE_OVERLAY"
         const val ACTION_STOP = "io.github.mauriciogamedev.overlay01.action.STOP_OVERLAY"
         const val EXTRA_URL = "overlay_url"
+        const val EXTRA_SCALE_PERCENT = "overlay_scale_percent"
 
         const val PREFS_NAME = "overlay01_settings"
         const val PREF_URL = "overlay_url"
         const val PREF_LOCKED = "overlay_locked"
         const val PREF_VISIBLE = "overlay_visible"
+        const val PREF_SCALE_PERCENT = "overlay_scale_percent"
+
+        const val MIN_SCALE_PERCENT = 40
+        const val MAX_SCALE_PERCENT = 100
+        const val DEFAULT_SCALE_PERCENT = 100
 
         private const val CHANNEL_ID = "overlay01_active"
         private const val NOTIFICATION_ID = 1001
