@@ -130,13 +130,7 @@ class MainActivity : Activity() {
 
         return ScrollView(this).apply {
             setBackgroundColor(Color.rgb(14, 14, 16))
-            addView(
-                content,
-                ScrollView.LayoutParams(
-                    ScrollView.LayoutParams.MATCH_PARENT,
-                    ScrollView.LayoutParams.WRAP_CONTENT
-                )
-            )
+            addView(content)
         }
     }
 
