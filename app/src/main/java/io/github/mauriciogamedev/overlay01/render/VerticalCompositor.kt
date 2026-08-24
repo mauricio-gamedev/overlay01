@@ -8,11 +8,10 @@ import java.nio.FloatBuffer
 import kotlin.math.min
 
 /**
- * Very small GPU compositor for the first Overlay01 pipeline.
+ * Small GPU compositor for Overlay01.
  *
- * It renders the captured screen texture into a fixed vertical canvas while
- * preserving the source aspect ratio. No CPU frame copies are performed.
- * The unused area stays black and will later be available for URL overlays.
+ * Pass 1 draws the captured game into a fixed 9:16 canvas without stretching.
+ * Pass 2 can alpha-blend a full-canvas URL overlay texture on top.
  */
 class VerticalCompositor(
     private val outputWidth: Int,
@@ -35,14 +34,10 @@ class VerticalCompositor(
         .order(ByteOrder.nativeOrder())
         .asFloatBuffer()
         .apply {
-            put(
-                floatArrayOf(
-                    0f, 0f,
-                    1f, 0f,
-                    0f, 1f,
-                    1f, 1f
-                )
-            )
+            put(0f).put(0f)
+            put(1f).put(0f)
+            put(0f).put(1f)
+            put(1f).put(1f)
             position(0)
         }
 
@@ -84,7 +79,7 @@ class VerticalCompositor(
         check(samplerLocation >= 0) { "Missing uTexture in compositor shader" }
     }
 
-    fun render(
+    fun renderGame(
         externalTextureId: Int,
         textureTransform: FloatArray,
         sourceWidth: Int,
@@ -99,29 +94,61 @@ class VerticalCompositor(
         )
         val renderedWidth = sourceWidth * scale
         val renderedHeight = sourceHeight * scale
-
-        // NDC spans -1..1. These ratios therefore become the half extents.
         val halfWidth = renderedWidth / outputWidth.toFloat()
         val halfHeight = renderedHeight / outputHeight.toFloat()
-
-        positionBuffer.clear()
-        positionBuffer.put(
-            floatArrayOf(
-                -halfWidth, -halfHeight,
-                halfWidth, -halfHeight,
-                -halfWidth, halfHeight,
-                halfWidth, halfHeight
-            )
-        )
-        positionBuffer.position(0)
 
         GLES20.glViewport(0, 0, outputWidth, outputHeight)
         GLES20.glDisable(GLES20.GL_BLEND)
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-        GLES20.glUseProgram(program)
+        drawExternalTexture(
+            textureId = externalTextureId,
+            textureTransform = textureTransform,
+            halfWidth = halfWidth,
+            halfHeight = halfHeight,
+            blend = false
+        )
+    }
 
+    fun renderOverlay(
+        externalTextureId: Int,
+        textureTransform: FloatArray
+    ) {
+        check(program != 0) { "VerticalCompositor is not initialized" }
+
+        drawExternalTexture(
+            textureId = externalTextureId,
+            textureTransform = textureTransform,
+            halfWidth = 1f,
+            halfHeight = 1f,
+            blend = true
+        )
+    }
+
+    private fun drawExternalTexture(
+        textureId: Int,
+        textureTransform: FloatArray,
+        halfWidth: Float,
+        halfHeight: Float,
+        blend: Boolean
+    ) {
+        positionBuffer.clear()
+        positionBuffer.put(-halfWidth).put(-halfHeight)
+        positionBuffer.put(halfWidth).put(-halfHeight)
+        positionBuffer.put(-halfWidth).put(halfHeight)
+        positionBuffer.put(halfWidth).put(halfHeight)
+        positionBuffer.position(0)
+
+        if (blend) {
+            GLES20.glEnable(GLES20.GL_BLEND)
+            // Android UI surfaces use premultiplied alpha.
+            GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+        } else {
+            GLES20.glDisable(GLES20.GL_BLEND)
+        }
+
+        GLES20.glUseProgram(program)
         GLES20.glEnableVertexAttribArray(positionLocation)
         GLES20.glVertexAttribPointer(
             positionLocation,
@@ -152,14 +179,14 @@ class VerticalCompositor(
         )
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, externalTextureId)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
         GLES20.glUniform1i(samplerLocation, 0)
-
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
         GLES20.glDisableVertexAttribArray(positionLocation)
         GLES20.glDisableVertexAttribArray(texCoordLocation)
+        if (blend) GLES20.glDisable(GLES20.GL_BLEND)
     }
 
     fun release() {
