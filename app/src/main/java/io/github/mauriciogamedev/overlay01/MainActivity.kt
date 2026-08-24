@@ -12,6 +12,7 @@ import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import io.github.mauriciogamedev.overlay01.service.OverlayService
@@ -22,6 +23,8 @@ class MainActivity : Activity() {
     private lateinit var lockOverlay: CheckBox
     private lateinit var permissionButton: Button
     private lateinit var statusText: TextView
+    private lateinit var sizeLabel: TextView
+    private lateinit var sizeSeekBar: SeekBar
 
     private val preferences by lazy {
         getSharedPreferences(OverlayService.PREFS_NAME, MODE_PRIVATE)
@@ -48,6 +51,9 @@ class MainActivity : Activity() {
         val density = resources.displayMetrics.density
         val pad = (18 * density).toInt()
         val gap = (10 * density).toInt()
+        val savedScale = preferences
+            .getInt(OverlayService.PREF_SCALE_PERCENT, OverlayService.DEFAULT_SCALE_PERCENT)
+            .coerceIn(OverlayService.MIN_SCALE_PERCENT, OverlayService.MAX_SCALE_PERCENT)
 
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -84,8 +90,49 @@ class MainActivity : Activity() {
         }
         content.addView(overlayUrl)
 
+        sizeLabel = TextView(this).apply {
+            text = "Tamanho da overlay: $savedScale%"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setPadding(0, gap, 0, 0)
+        }
+        content.addView(sizeLabel)
+
+        sizeSeekBar = SeekBar(this).apply {
+            max = OverlayService.MAX_SCALE_PERCENT - OverlayService.MIN_SCALE_PERCENT
+            progress = savedScale - OverlayService.MIN_SCALE_PERCENT
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    val percent = progress + OverlayService.MIN_SCALE_PERCENT
+                    sizeLabel.text = "Tamanho da overlay: $percent%"
+                    if (fromUser) {
+                        preferences.edit().putInt(OverlayService.PREF_SCALE_PERCENT, percent).apply()
+                    }
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                    if (!lockOverlay.isChecked) applyResizeToActiveOverlay()
+                }
+            })
+        }
+        content.addView(sizeSeekBar)
+
+        content.addView(Button(this).apply {
+            text = "Restaurar tamanho 100%"
+            setOnClickListener {
+                if (lockOverlay.isChecked) return@setOnClickListener
+                sizeSeekBar.progress = OverlayService.MAX_SCALE_PERCENT - OverlayService.MIN_SCALE_PERCENT
+                preferences.edit()
+                    .putInt(OverlayService.PREF_SCALE_PERCENT, OverlayService.MAX_SCALE_PERCENT)
+                    .apply()
+                applyResizeToActiveOverlay()
+            }
+        })
+
         lockOverlay = CheckBox(this).apply {
-            text = "Fixar link"
+            text = "Fixar configuração"
             setTextColor(Color.WHITE)
             isChecked = preferences.getBoolean(OverlayService.PREF_LOCKED, false)
             setOnCheckedChangeListener { _, checked ->
@@ -119,7 +166,7 @@ class MainActivity : Activity() {
         })
 
         content.addView(TextView(this).apply {
-            text = "O app mantém apenas uma WebView transparente e um serviço persistente. Sem RTMP, captura, áudio ou encoder."
+            text = "O app mantém apenas uma WebView transparente e um serviço persistente. Mudanças de tamanho não recarregam o layout."
             textSize = 12f
             setTextColor(Color.GRAY)
             setPadding(0, gap, 0, 0)
@@ -137,6 +184,8 @@ class MainActivity : Activity() {
     private fun applyLockState(locked: Boolean) {
         overlayUrl.isEnabled = !locked
         overlayUrl.alpha = if (locked) 0.65f else 1f
+        sizeSeekBar.isEnabled = !locked
+        sizeSeekBar.alpha = if (locked) 0.65f else 1f
     }
 
     private fun updateUiState() {
@@ -171,6 +220,11 @@ class MainActivity : Activity() {
         )
     }
 
+    private fun currentScalePercent(): Int {
+        return (sizeSeekBar.progress + OverlayService.MIN_SCALE_PERCENT)
+            .coerceIn(OverlayService.MIN_SCALE_PERCENT, OverlayService.MAX_SCALE_PERCENT)
+    }
+
     private fun startOrUpdateOverlay() {
         val raw = overlayUrl.text.toString().trim()
         val uri = runCatching { Uri.parse(raw) }.getOrNull()
@@ -184,7 +238,11 @@ class MainActivity : Activity() {
             return
         }
 
-        preferences.edit().putString(OverlayService.PREF_URL, raw).apply()
+        val scalePercent = currentScalePercent()
+        preferences.edit()
+            .putString(OverlayService.PREF_URL, raw)
+            .putInt(OverlayService.PREF_SCALE_PERCENT, scalePercent)
+            .apply()
 
         if (!Settings.canDrawOverlays(this)) {
             startAfterOverlayPermission = true
@@ -202,10 +260,28 @@ class MainActivity : Activity() {
             Intent(this, OverlayService::class.java)
                 .setAction(action)
                 .putExtra(OverlayService.EXTRA_URL, raw)
+                .putExtra(OverlayService.EXTRA_SCALE_PERCENT, scalePercent)
         )
 
         preferences.edit().putBoolean(OverlayService.PREF_VISIBLE, true).apply()
         statusText.text = "Overlay ativa · pode abrir o jogo"
+    }
+
+    private fun applyResizeToActiveOverlay() {
+        val scalePercent = currentScalePercent()
+        preferences.edit().putInt(OverlayService.PREF_SCALE_PERCENT, scalePercent).apply()
+
+        if (!Settings.canDrawOverlays(this) ||
+            !preferences.getBoolean(OverlayService.PREF_VISIBLE, false)
+        ) {
+            return
+        }
+
+        startService(
+            Intent(this, OverlayService::class.java)
+                .setAction(OverlayService.ACTION_RESIZE)
+                .putExtra(OverlayService.EXTRA_SCALE_PERCENT, scalePercent)
+        )
     }
 
     private fun stopOverlay() {
