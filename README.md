@@ -13,7 +13,7 @@ The project intentionally starts small. Stability, low memory usage and recovera
 ## Milestones
 
 - [x] Repository initialized
-- [ ] Android application skeleton
+- [x] Android application skeleton
 - [ ] MediaProjection capture session
 - [ ] GPU compositor
 - [ ] URL overlay engine
@@ -32,6 +32,16 @@ The project intentionally starts small. Stability, low memory usage and recovera
 - `service`: foreground live-session lifetime
 - `ui`: thin configuration and preview layer
 
+## Current Stage 1 baseline
+
+- Native Android app with no Compose dependency
+- URL overlay preview through a hardware-accelerated WebView
+- JavaScript and DOM storage enabled for interactive overlay pages
+- MediaProjection permission flow wired from the activity
+- Dedicated `mediaProjection` foreground service lifecycle
+- Android 14+ foreground-service permission/type requirements declared
+- Debug APK workflow prepared for GitHub Actions
+
 ## Status
 
-Early development / Stage 1.
+Stage 1 baseline created. Next: connect MediaProjection to a real `VirtualDisplay` and rendering surface.
