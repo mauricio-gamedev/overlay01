@@ -43,6 +43,7 @@ class MainActivity : Activity() {
     private fun buildUi(): View {
         val density = resources.displayMetrics.density
         val pad = (16 * density).toInt()
+        val savedOverlayUrl = preferences.getString(PREF_OVERLAY_URL, "").orEmpty()
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -57,7 +58,7 @@ class MainActivity : Activity() {
         }
 
         statusText = TextView(this).apply {
-            text = "Stage 3 · 720×1280 GPU compositor"
+            text = "Stage 4 · off-screen URL overlay"
             setTextColor(Color.LTGRAY)
         }
 
@@ -66,7 +67,7 @@ class MainActivity : Activity() {
             setSingleLine(true)
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
-            setText(preferences.getString(PREF_OVERLAY_URL, ""))
+            setText(savedOverlayUrl)
         }
 
         loadButton = Button(this).apply {
@@ -135,6 +136,9 @@ class MainActivity : Activity() {
         )
 
         applyOverlayLock(lockOverlay.isChecked, announce = false)
+        if (savedOverlayUrl.isNotBlank()) {
+            overlayPreview.loadUrl(savedOverlayUrl)
+        }
 
         return root
     }
@@ -180,13 +184,19 @@ class MainActivity : Activity() {
             return
         }
 
+        val savedOverlayUrl = preferences.getString(PREF_OVERLAY_URL, "").orEmpty()
         val serviceIntent = Intent(this, CaptureService::class.java)
             .setAction(CaptureService.ACTION_START)
             .putExtra(CaptureService.EXTRA_RESULT_CODE, resultCode)
             .putExtra(CaptureService.EXTRA_RESULT_DATA, data)
+            .putExtra(CaptureService.EXTRA_OVERLAY_URL, savedOverlayUrl)
 
         startForegroundService(serviceIntent)
-        statusText.text = "Capture session active · 9:16 compositor running"
+        statusText.text = if (savedOverlayUrl.isBlank()) {
+            "Capture active · game-only 9:16"
+        } else {
+            "Capture active · game + URL overlay"
+        }
     }
 
     override fun onDestroy() {
