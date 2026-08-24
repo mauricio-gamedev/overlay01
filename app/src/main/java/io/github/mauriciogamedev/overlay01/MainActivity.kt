@@ -1,12 +1,9 @@
 package io.github.mauriciogamedev.overlay01
 
-import android.Manifest
 import android.app.Activity
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
@@ -24,7 +21,6 @@ class MainActivity : Activity() {
     private lateinit var overlayUrl: EditText
     private lateinit var lockOverlay: CheckBox
     private lateinit var permissionButton: Button
-    private lateinit var startButton: Button
     private lateinit var statusText: TextView
 
     private val preferences by lazy {
@@ -36,7 +32,6 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(buildUi())
-        requestNotificationPermissionIfNeeded()
     }
 
     override fun onResume() {
@@ -60,20 +55,18 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.rgb(14, 14, 16))
         }
 
-        val title = TextView(this).apply {
+        content.addView(TextView(this).apply {
             text = "Overlay01"
             textSize = 28f
             setTextColor(Color.WHITE)
-        }
-        content.addView(title)
+        })
 
-        val subtitle = TextView(this).apply {
+        content.addView(TextView(this).apply {
             text = "Cole o link da overlay e ative. Ela fica por cima do jogo sem bloquear nenhum toque."
             textSize = 15f
             setTextColor(Color.LTGRAY)
             setPadding(0, gap, 0, gap)
-        }
-        content.addView(subtitle)
+        })
 
         statusText = TextView(this).apply {
             textSize = 14f
@@ -102,13 +95,12 @@ class MainActivity : Activity() {
         }
         content.addView(lockOverlay)
 
-        val touchInfo = TextView(this).apply {
-            text = "Touch-through é sempre ativo: mesmo tocando exatamente em cima da overlay, o jogo recebe o toque."
+        content.addView(TextView(this).apply {
+            text = "Touch-through fica sempre ativo: tocar em cima da overlay continua controlando o jogo."
             textSize = 13f
             setTextColor(Color.GRAY)
             setPadding(0, 0, 0, gap)
-        }
-        content.addView(touchInfo)
+        })
 
         permissionButton = Button(this).apply {
             text = "Permitir sobre outros apps"
@@ -116,25 +108,22 @@ class MainActivity : Activity() {
         }
         content.addView(permissionButton)
 
-        startButton = Button(this).apply {
+        content.addView(Button(this).apply {
             text = "Ativar / atualizar overlay"
             setOnClickListener { startOrUpdateOverlay() }
-        }
-        content.addView(startButton)
+        })
 
-        val stopButton = Button(this).apply {
+        content.addView(Button(this).apply {
             text = "Desativar overlay"
             setOnClickListener { stopOverlay() }
-        }
-        content.addView(stopButton)
+        })
 
-        val footer = TextView(this).apply {
-            text = "Sem RTMP, sem captura de tela, sem áudio e sem encoder. O app mantém somente uma WebView transparente e o serviço necessário para ela continuar ativa."
+        content.addView(TextView(this).apply {
+            text = "O app mantém apenas uma WebView transparente e um serviço persistente. Sem RTMP, captura, áudio ou encoder."
             textSize = 12f
             setTextColor(Color.GRAY)
             setPadding(0, gap, 0, 0)
-        }
-        content.addView(footer)
+        })
 
         applyLockState(lockOverlay.isChecked)
         updateUiState()
@@ -168,8 +157,8 @@ class MainActivity : Activity() {
         }
 
         statusText.text = when {
-            !allowed -> "Aguardando permissão de sobreposição"
-            active -> "Overlay marcada como ativa · serviço persistente"
+            !allowed -> "Falta apenas a permissão de sobreposição"
+            active -> "Overlay ativa · pode abrir o jogo"
             else -> "Pronto para ativar"
         }
     }
@@ -180,11 +169,12 @@ class MainActivity : Activity() {
             return
         }
 
-        val intent = Intent(
-            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-            Uri.parse("package:$packageName")
+        startActivity(
+            Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
         )
-        startActivity(intent)
     }
 
     private fun startOrUpdateOverlay() {
@@ -208,19 +198,18 @@ class MainActivity : Activity() {
             return
         }
 
-        requestNotificationPermissionIfNeeded()
-
         val action = if (preferences.getBoolean(OverlayService.PREF_VISIBLE, false)) {
             OverlayService.ACTION_UPDATE
         } else {
             OverlayService.ACTION_SHOW
         }
 
-        val intent = Intent(this, OverlayService::class.java)
-            .setAction(action)
-            .putExtra(OverlayService.EXTRA_URL, raw)
+        startForegroundService(
+            Intent(this, OverlayService::class.java)
+                .setAction(action)
+                .putExtra(OverlayService.EXTRA_URL, raw)
+        )
 
-        startForegroundService(intent)
         preferences.edit().putBoolean(OverlayService.PREF_VISIBLE, true).apply()
         statusText.text = "Overlay ativa · pode abrir o jogo"
     }
@@ -232,20 +221,5 @@ class MainActivity : Activity() {
         )
         preferences.edit().putBoolean(OverlayService.PREF_VISIBLE, false).apply()
         statusText.text = "Overlay desativada"
-    }
-
-    private fun requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                REQUEST_NOTIFICATIONS
-            )
-        }
-    }
-
-    private companion object {
-        const val REQUEST_NOTIFICATIONS = 2001
     }
 }
