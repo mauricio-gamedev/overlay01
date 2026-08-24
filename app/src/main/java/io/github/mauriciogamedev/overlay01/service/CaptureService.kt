@@ -14,16 +14,28 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.DisplayMetrics
+import android.view.WindowManager
 import io.github.mauriciogamedev.overlay01.MainActivity
+import io.github.mauriciogamedev.overlay01.capture.ScreenCaptureEngine
 
 class CaptureService : Service() {
 
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var mediaProjection: MediaProjection? = null
+    private var captureEngine: ScreenCaptureEngine? = null
+
     private val callback = object : MediaProjection.Callback() {
         override fun onStop() {
+            captureEngine?.stop()
+            captureEngine = null
             mediaProjection = null
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
+        }
+
+        override fun onCapturedContentResize(width: Int, height: Int) {
+            captureEngine?.resize(width, height)
         }
     }
 
@@ -53,9 +65,21 @@ class CaptureService : Service() {
         startProjectionForeground()
 
         val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        mediaProjection = manager.getMediaProjection(resultCode, resultData).also {
-            it.registerCallback(callback, Handler(Looper.getMainLooper()))
+        val projection = manager.getMediaProjection(resultCode, resultData).also {
+            it.registerCallback(callback, mainHandler)
         }
+        mediaProjection = projection
+
+        val spec = resolveCaptureSpec()
+        captureEngine = ScreenCaptureEngine(
+            projection = projection,
+            initialWidth = spec.width,
+            initialHeight = spec.height,
+            densityDpi = spec.densityDpi,
+            onError = {
+                mainHandler.post { stopProjection() }
+            }
+        ).also { it.start() }
 
         return START_NOT_STICKY
     }
@@ -68,14 +92,42 @@ class CaptureService : Service() {
     }
 
     private fun stopProjection() {
+        captureEngine?.stop()
+        captureEngine = null
+
         val projection = mediaProjection
         mediaProjection = null
         if (projection != null) {
             runCatching { projection.unregisterCallback(callback) }
             runCatching { projection.stop() }
         }
+
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun resolveCaptureSpec(): CaptureSpec {
+        val densityDpi = resources.displayMetrics.densityDpi.coerceAtLeast(1)
+        val windowManager = getSystemService(WindowManager::class.java)
+
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = windowManager.maximumWindowMetrics.bounds
+            CaptureSpec(
+                width = bounds.width().coerceAtLeast(1),
+                height = bounds.height().coerceAtLeast(1),
+                densityDpi = densityDpi
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            val metrics = DisplayMetrics().also {
+                windowManager.defaultDisplay.getRealMetrics(it)
+            }
+            CaptureSpec(
+                width = metrics.widthPixels.coerceAtLeast(1),
+                height = metrics.heightPixels.coerceAtLeast(1),
+                densityDpi = metrics.densityDpi.coerceAtLeast(1)
+            )
+        }
     }
 
     private fun startProjectionForeground() {
@@ -109,7 +161,7 @@ class CaptureService : Service() {
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.presence_video_online)
             .setContentTitle("Overlay01")
-            .setContentText("Screen capture session is active")
+            .setContentText("GPU screen capture is active")
             .setContentIntent(openAppIntent)
             .setOngoing(true)
             .addAction(Notification.Action.Builder(null, "Stop", stopIntent).build())
@@ -135,6 +187,12 @@ class CaptureService : Service() {
             getParcelableExtra(EXTRA_RESULT_DATA)
         }
     }
+
+    private data class CaptureSpec(
+        val width: Int,
+        val height: Int,
+        val densityDpi: Int
+    )
 
     private object ActivityResultCodes {
         const val INVALID = Int.MIN_VALUE
