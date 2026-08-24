@@ -25,17 +25,27 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import io.github.mauriciogamedev.overlay01.MainActivity
 
 class OverlayService : Service() {
+
+    private data class SlotRuntime(
+        val index: Int,
+        var view: WebView? = null,
+        var currentUrl: String? = null,
+        var scalePercent: Int = DEFAULT_SCALE_PERCENT,
+        var xPercent: Int = DEFAULT_POSITION_PERCENT,
+        var yPercent: Int = DEFAULT_POSITION_PERCENT,
+        var restartRunnable: Runnable? = null
+    )
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val windowManager by lazy { getSystemService(WindowManager::class.java) }
     private val preferences by lazy { getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
 
-    private var overlayView: WebView? = null
-    private var currentUrl: String? = null
-    private var currentScalePercent = DEFAULT_SCALE_PERCENT
+    private val slots = arrayOf(SlotRuntime(1), SlotRuntime(2))
+    private var overlayRoot: FrameLayout? = null
     private var explicitStop = false
 
     override fun onCreate() {
@@ -47,74 +57,152 @@ class OverlayService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             explicitStop = true
-            preferences.edit().putBoolean(PREF_VISIBLE, false).apply()
-            removeOverlay()
+            preferences.edit()
+                .putBoolean(prefEnabled(1), false)
+                .putBoolean(prefEnabled(2), false)
+                .apply()
+            removeAllOverlays()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
 
-        val requestedUrl = intent?.getStringExtra(EXTRA_URL)
-            ?.trim()
-            ?.takeIf(::isSupportedUrl)
+        val restoring = intent == null
+        val shouldApply = intent?.action == ACTION_APPLY || restoring
+        if (!shouldApply || !Settings.canDrawOverlays(this)) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
-        val savedUrl = preferences.getString(PREF_URL, "")
-            ?.trim()
-            ?.takeIf(::isSupportedUrl)
-
-        val url = requestedUrl ?: savedUrl
-        val requestedScale = intent?.takeIf { it.hasExtra(EXTRA_SCALE_PERCENT) }
-            ?.getIntExtra(EXTRA_SCALE_PERCENT, DEFAULT_SCALE_PERCENT)
-        val savedScale = preferences.getInt(PREF_SCALE_PERCENT, DEFAULT_SCALE_PERCENT)
-        val scalePercent = (requestedScale ?: savedScale)
-            .coerceIn(MIN_SCALE_PERCENT, MAX_SCALE_PERCENT)
-
-        val shouldRestore = intent == null && preferences.getBoolean(PREF_VISIBLE, false)
-        val shouldShow = intent?.action == ACTION_SHOW ||
-            intent?.action == ACTION_UPDATE ||
-            intent?.action == ACTION_RESIZE ||
-            shouldRestore
-
-        if (!shouldShow || url == null || !Settings.canDrawOverlays(this)) {
+        val activeConfigs = (1..2).mapNotNull(::readConfig).filter { it.enabled }
+        if (activeConfigs.isEmpty()) {
+            removeAllOverlays()
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
 
         explicitStop = false
-        currentScalePercent = scalePercent
-        preferences.edit()
-            .putString(PREF_URL, url)
-            .putInt(PREF_SCALE_PERCENT, scalePercent)
-            .putBoolean(PREF_VISIBLE, true)
-            .apply()
-
         startOverlayForeground()
-        showOrUpdateOverlay(url, scalePercent)
+        ensureOverlayRoot()
+
+        for (config in activeConfigs) {
+            syncSlot(config)
+        }
+
+        for (slot in slots) {
+            if (activeConfigs.none { it.index == slot.index }) {
+                removeSlot(slot)
+            }
+        }
+
+        updateNotification(activeConfigs.size)
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        removeOverlay()
-        if (explicitStop) {
-            preferences.edit().putBoolean(PREF_VISIBLE, false).apply()
-        }
+        removeAllOverlays()
         super.onDestroy()
     }
 
-    private fun showOrUpdateOverlay(url: String, scalePercent: Int) {
-        val currentView = overlayView
-        if (currentUrl == url && currentView != null) {
-            applyScale(currentView, scalePercent)
-            updateNotification("Overlay ativa · tamanho ${scalePercent}%")
+    private data class SlotConfig(
+        val index: Int,
+        val enabled: Boolean,
+        val url: String,
+        val scalePercent: Int,
+        val xPercent: Int,
+        val yPercent: Int
+    )
+
+    private fun readConfig(index: Int): SlotConfig? {
+        val enabled = preferences.getBoolean(prefEnabled(index), false)
+        val url = preferences.getString(prefUrl(index), "")
+            ?.trim()
+            ?.takeIf(::isSupportedUrl)
+            ?: return if (enabled) null else SlotConfig(
+                index,
+                false,
+                "",
+                DEFAULT_SCALE_PERCENT,
+                DEFAULT_POSITION_PERCENT,
+                DEFAULT_POSITION_PERCENT
+            )
+
+        return SlotConfig(
+            index = index,
+            enabled = enabled,
+            url = url,
+            scalePercent = preferences
+                .getInt(prefScale(index), DEFAULT_SCALE_PERCENT)
+                .coerceIn(MIN_SCALE_PERCENT, MAX_SCALE_PERCENT),
+            xPercent = preferences
+                .getInt(prefX(index), DEFAULT_POSITION_PERCENT)
+                .coerceIn(MIN_POSITION_PERCENT, MAX_POSITION_PERCENT),
+            yPercent = preferences
+                .getInt(prefY(index), DEFAULT_POSITION_PERCENT)
+                .coerceIn(MIN_POSITION_PERCENT, MAX_POSITION_PERCENT)
+        )
+    }
+
+    private fun ensureOverlayRoot() {
+        if (overlayRoot != null) return
+
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            clipChildren = false
+            clipToPadding = false
+        }
+
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+
+        try {
+            windowManager.addView(root, params)
+            overlayRoot = root
+        } catch (_: Throwable) {
+            stopSelf()
+        }
+    }
+
+    private fun syncSlot(config: SlotConfig) {
+        val slot = slots[config.index - 1]
+        slot.restartRunnable?.let(mainHandler::removeCallbacks)
+        slot.restartRunnable = null
+
+        slot.scalePercent = config.scalePercent
+        slot.xPercent = config.xPercent
+        slot.yPercent = config.yPercent
+
+        val existing = slot.view
+        if (existing != null && slot.currentUrl == config.url) {
+            applyTransform(existing, slot)
             return
         }
 
-        removeOverlay()
-        currentUrl = url
-        currentScalePercent = scalePercent
+        removeSlot(slot, clearCurrentUrl = false)
+        slot.currentUrl = config.url
 
+        val root = overlayRoot ?: return
         val themedContext = ContextThemeWrapper(
             this,
             android.R.style.Theme_Material_Light_NoActionBar
@@ -167,83 +255,91 @@ class OverlayService : Service() {
                         "})()",
                         null
                     )
-                    applyScale(view, currentScalePercent)
-                    updateNotification("Overlay ativa · toque livre no jogo")
+                    applyTransform(view, slot)
                 }
 
                 override fun onRenderProcessGone(
                     view: WebView,
                     detail: RenderProcessGoneDetail
                 ): Boolean {
-                    if (view === overlayView) {
-                        runCatching { windowManager.removeViewImmediate(view) }
-                        overlayView = null
+                    if (view === slot.view) {
+                        runCatching { overlayRoot?.removeView(view) }
+                        slot.view = null
                         runCatching { view.destroy() }
-
-                        val urlToRestore = currentUrl
-                        val scaleToRestore = currentScalePercent
-                        if (urlToRestore != null && preferences.getBoolean(PREF_VISIBLE, false)) {
-                            mainHandler.postDelayed(
-                                { showOrUpdateOverlay(urlToRestore, scaleToRestore) },
-                                RENDERER_RESTART_DELAY_MS
-                            )
-                        }
+                        scheduleSlotRestart(slot)
                     }
                     return true
                 }
             }
         }
 
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = 0
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                layoutInDisplayCutoutMode =
-                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        try {
+            root.addView(
+                webView,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+            )
+            slot.view = webView
+            applyTransform(webView, slot)
+            webView.loadUrl(config.url)
+        } catch (_: Throwable) {
+            runCatching { root.removeView(webView) }
+            runCatching { webView.destroy() }
+            slot.view = null
+        }
+    }
+
+    private fun scheduleSlotRestart(slot: SlotRuntime) {
+        val runnable = Runnable {
+            slot.restartRunnable = null
+            val config = readConfig(slot.index)
+            if (config?.enabled == true && Settings.canDrawOverlays(this)) {
+                ensureOverlayRoot()
+                syncSlot(config)
             }
         }
+        slot.restartRunnable = runnable
+        mainHandler.postDelayed(runnable, RENDERER_RESTART_DELAY_MS)
+    }
 
-        try {
-            windowManager.addView(webView, params)
-            overlayView = webView
-            applyScale(webView, scalePercent)
-            webView.loadUrl(url)
-        } catch (error: Throwable) {
-            runCatching { webView.destroy() }
-            overlayView = null
-            currentUrl = null
-            preferences.edit().putBoolean(PREF_VISIBLE, false).apply()
-            updateNotification("Falha ao abrir overlay")
-            stopSelf()
+    private fun applyTransform(view: WebView, slot: SlotRuntime) {
+        val scale = slot.scalePercent
+            .coerceIn(MIN_SCALE_PERCENT, MAX_SCALE_PERCENT) / 100f
+        val x = slot.xPercent
+            .coerceIn(MIN_POSITION_PERCENT, MAX_POSITION_PERCENT)
+        val y = slot.yPercent
+            .coerceIn(MIN_POSITION_PERCENT, MAX_POSITION_PERCENT)
+        val (screenWidth, screenHeight) = displaySize()
+
+        view.pivotX = 0f
+        view.pivotY = 0f
+        view.scaleX = scale
+        view.scaleY = scale
+        view.translationX = screenWidth * (x / 100f)
+        view.translationY = screenHeight * (y / 100f)
+    }
+
+    private fun displaySize(): Pair<Int, Int> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = windowManager.maximumWindowMetrics.bounds
+            bounds.width() to bounds.height()
+        } else {
+            resources.displayMetrics.widthPixels to resources.displayMetrics.heightPixels
         }
     }
 
-    private fun applyScale(view: WebView, scalePercent: Int) {
-        val scale = scalePercent.coerceIn(MIN_SCALE_PERCENT, MAX_SCALE_PERCENT) / 100f
-        if (view.scaleX == scale && view.scaleY == scale) return
-        view.scaleX = scale
-        view.scaleY = scale
-    }
+    private fun removeSlot(slot: SlotRuntime, clearCurrentUrl: Boolean = true) {
+        slot.restartRunnable?.let(mainHandler::removeCallbacks)
+        slot.restartRunnable = null
 
-    private fun removeOverlay() {
-        mainHandler.removeCallbacksAndMessages(null)
-        val view = overlayView
-        overlayView = null
-        currentUrl = null
+        val view = slot.view
+        slot.view = null
+        if (clearCurrentUrl) slot.currentUrl = null
 
         if (view != null) {
-            runCatching { windowManager.removeViewImmediate(view) }
+            runCatching { overlayRoot?.removeView(view) }
             runCatching { view.stopLoading() }
             runCatching { view.loadUrl("about:blank") }
             runCatching { view.clearHistory() }
@@ -251,8 +347,18 @@ class OverlayService : Service() {
         }
     }
 
+    private fun removeAllOverlays() {
+        for (slot in slots) removeSlot(slot)
+
+        val root = overlayRoot
+        overlayRoot = null
+        if (root != null) {
+            runCatching { windowManager.removeViewImmediate(root) }
+        }
+    }
+
     private fun startOverlayForeground() {
-        val notification = buildNotification("Overlay ativa · toque livre no jogo")
+        val notification = buildNotification("Overlays ativas · toque livre no jogo")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NOTIFICATION_ID,
@@ -264,9 +370,14 @@ class OverlayService : Service() {
         }
     }
 
-    private fun updateNotification(text: String) {
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(NOTIFICATION_ID, buildNotification(text))
+    private fun updateNotification(activeCount: Int) {
+        val text = if (activeCount == 1) {
+            "1 overlay ativa · toque livre no jogo"
+        } else {
+            "$activeCount overlays ativas · toque livre no jogo"
+        }
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIFICATION_ID, buildNotification(text))
     }
 
     private fun buildNotification(text: String): Notification {
@@ -291,7 +402,7 @@ class OverlayService : Service() {
             .setContentIntent(openIntent)
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
-            .addAction(Notification.Action.Builder(null, "Desativar", stopIntent).build())
+            .addAction(Notification.Action.Builder(null, "Desativar todas", stopIntent).build())
             .build()
     }
 
@@ -301,7 +412,7 @@ class OverlayService : Service() {
             "Overlay ativa",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Mantém a overlay web ativa durante o jogo"
+            description = "Mantém as overlays web ativas durante o jogo"
             setShowBadge(false)
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
@@ -313,22 +424,31 @@ class OverlayService : Service() {
     }
 
     companion object {
-        const val ACTION_SHOW = "io.github.mauriciogamedev.overlay01.action.SHOW_OVERLAY"
-        const val ACTION_UPDATE = "io.github.mauriciogamedev.overlay01.action.UPDATE_OVERLAY"
-        const val ACTION_RESIZE = "io.github.mauriciogamedev.overlay01.action.RESIZE_OVERLAY"
-        const val ACTION_STOP = "io.github.mauriciogamedev.overlay01.action.STOP_OVERLAY"
-        const val EXTRA_URL = "overlay_url"
-        const val EXTRA_SCALE_PERCENT = "overlay_scale_percent"
+        const val ACTION_APPLY = "io.github.mauriciogamedev.overlay01.action.APPLY_OVERLAYS"
+        const val ACTION_STOP = "io.github.mauriciogamedev.overlay01.action.STOP_OVERLAYS"
 
         const val PREFS_NAME = "overlay01_settings"
-        const val PREF_URL = "overlay_url"
-        const val PREF_LOCKED = "overlay_locked"
-        const val PREF_VISIBLE = "overlay_visible"
-        const val PREF_SCALE_PERCENT = "overlay_scale_percent"
+
+        fun prefUrl(slot: Int) = "overlay_${slot}_url"
+        fun prefEnabled(slot: Int) = "overlay_${slot}_enabled"
+        fun prefLocked(slot: Int) = "overlay_${slot}_locked"
+        fun prefScale(slot: Int) = "overlay_${slot}_scale_percent"
+        fun prefX(slot: Int) = "overlay_${slot}_x_percent"
+        fun prefY(slot: Int) = "overlay_${slot}_y_percent"
+
+        const val LEGACY_PREF_URL = "overlay_url"
+        const val LEGACY_PREF_LOCKED = "overlay_locked"
+        const val LEGACY_PREF_VISIBLE = "overlay_visible"
+        const val LEGACY_PREF_SCALE = "overlay_scale_percent"
+        const val PREF_MIGRATED_V4 = "settings_migrated_v4"
 
         const val MIN_SCALE_PERCENT = 40
         const val MAX_SCALE_PERCENT = 100
         const val DEFAULT_SCALE_PERCENT = 100
+
+        const val MIN_POSITION_PERCENT = -50
+        const val MAX_POSITION_PERCENT = 50
+        const val DEFAULT_POSITION_PERCENT = 0
 
         private const val CHANNEL_ID = "overlay01_active"
         private const val NOTIFICATION_ID = 1001
