@@ -57,7 +57,7 @@ class MainActivity : Activity() {
         }
 
         statusText = TextView(this).apply {
-            text = "Stage 2 · GPU capture + overlay URL"
+            text = "Stage 3 · 720×1280 GPU compositor"
             setTextColor(Color.LTGRAY)
         }
 
@@ -186,7 +186,7 @@ class MainActivity : Activity() {
             .putExtra(CaptureService.EXTRA_RESULT_DATA, data)
 
         startForegroundService(serviceIntent)
-        statusText.text = "Capture session active"
+        statusText.text = "Capture session active · 9:16 compositor running"
     }
 
     override fun onDestroy() {
