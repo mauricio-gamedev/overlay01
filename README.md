@@ -1,26 +1,29 @@
 # Overlay01
 
-Overlay01 v0.3 is a lightweight Android app focused on one URL-based web layout.
+Overlay01 v0.4 is a lightweight Android app for URL-based web overlays over games.
 
 ## Current scope
 
-- one HTTPS layout URL
-- transparent hardware-accelerated WebView
-- persistent foreground service
-- saved URL and Fixar configuração option
-- input passes through to the game while the layout is active
-- overlay scale control from 40% to 100%
-- scale persists between app launches
-- resize updates do not reload or recreate the WebView
-- same-URL updates reuse the existing WebView
-- automatic WebView recreation if the renderer process exits
+- up to 2 independent HTTPS overlay URLs
+- one transparent touch-through Android overlay window
+- 2 hardware-accelerated WebViews inside the same window
+- Overlay 2 is kept above Overlay 1
+- show/hide each overlay independently
+- scale each overlay from 40% to 100%
+- position each overlay on X and Y from -50% to +50%
+- independent Fixar option for each overlay
+- URL, visibility, scale, position and lock state persist between app launches
+- moving/resizing the same URL reuses the existing WebView without reload
+- automatic WebView recreation if its renderer process exits
+- foreground service keeps the active overlays alive
 - no external runtime libraries
+- no RTMP, screen capture, audio or encoder pipeline
 
-The old capture, encoder, audio and RTMP code remains removed. The project contains only the minimal UI and overlay service needed for this purpose.
+v0.3 settings are migrated into Overlay 1 on first launch after updating to v0.4.
 
 ## Build
 
-- version: 0.3.0
+- version: 0.4.0
 - minSdk: 26
 - targetSdk: 36
 - compileSdk: 36
