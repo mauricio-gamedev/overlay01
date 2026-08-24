@@ -18,6 +18,8 @@ import android.os.HandlerThread
 import android.view.Surface
 import io.github.mauriciogamedev.overlay01.overlay.WebOverlayEngine
 import io.github.mauriciogamedev.overlay01.render.VerticalCompositor
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -40,6 +42,7 @@ class ScreenCaptureEngine(
     private val frames = AtomicLong(0L)
     private val gameTextureTransform = FloatArray(16)
     private var lastOutputNs = 0L
+    private var firstPresentationSourceNs = 0L
 
     private var thread: HandlerThread? = null
     private var handler: Handler? = null
@@ -95,10 +98,16 @@ class ScreenCaptureEngine(
         if (!running.getAndSet(false)) return
         val captureHandler = handler ?: return
         val captureThread = thread ?: return
+        val released = CountDownLatch(1)
         captureHandler.post {
-            releaseOnCaptureThread()
-            captureThread.quitSafely()
+            try {
+                releaseOnCaptureThread()
+            } finally {
+                released.countDown()
+                captureThread.quitSafely()
+            }
         }
+        released.await(750, TimeUnit.MILLISECONDS)
     }
 
     private fun initializeGl() {
@@ -158,10 +167,11 @@ class ScreenCaptureEngine(
                 try {
                     texture.updateTexImage()
                     texture.getTransformMatrix(gameTextureTransform)
-                    val timestamp = texture.timestamp.takeIf { it > 0L } ?: System.nanoTime()
-                    if (timestamp - lastOutputNs >= FRAME_INTERVAL_NS) {
-                        lastOutputNs = timestamp
-                        renderCompositeFrame(timestamp)
+                    val sourceTimestamp = texture.timestamp.takeIf { it > 0L } ?: System.nanoTime()
+                    if (sourceTimestamp - lastOutputNs >= FRAME_INTERVAL_NS) {
+                        lastOutputNs = sourceTimestamp
+                        if (firstPresentationSourceNs == 0L) firstPresentationSourceNs = sourceTimestamp
+                        renderCompositeFrame((sourceTimestamp - firstPresentationSourceNs).coerceAtLeast(0L))
                     }
                 } catch (error: Throwable) {
                     if (running.get()) onError(error)
