@@ -25,3 +25,9 @@ android {
         }
     }
 }
+
+dependencies {
+    // RootEncoder is used only for the mature RTMP/RTMPS transport. Overlay01
+    // keeps its own MediaProjection, OpenGL compositor and MediaCodec pipeline.
+    implementation("com.github.pedroSG94.RootEncoder:library:2.8.0")
+}
