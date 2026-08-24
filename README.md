@@ -19,7 +19,7 @@ Overlay01 does not place a `TYPE_APPLICATION_OVERLAY` window over the game. Web 
 - [x] Repository initialized
 - [x] Android application skeleton
 - [x] MediaProjection capture session
-- [ ] GPU compositor
+- [x] GPU compositor
 - [ ] URL overlay engine
 - [ ] Hardware video encoding
 - [ ] RTMP/RTMPS publishing
@@ -36,7 +36,7 @@ Overlay01 does not place a `TYPE_APPLICATION_OVERLAY` window over the game. Web 
 - `service`: foreground live-session lifetime
 - `ui`: thin configuration and preview layer
 
-## Current Stage 2 baseline
+## Current Stage 3 baseline
 
 - Native Android app with no Compose dependency
 - URL overlay preview through a hardware-accelerated WebView
@@ -51,8 +51,12 @@ Overlay01 does not place a `TYPE_APPLICATION_OVERLAY` window over the game. Web 
 - Capture runs on its own `HandlerThread`
 - Captured-content resize support for orientation/size changes
 - No system overlay window, so gameplay touches are not intercepted by Overlay01
+- Fixed 720x1280 (9:16) GPU composition canvas
+- Game aspect ratio preserved with no stretching
+- Unused vertical canvas area remains available for URL overlays
+- SurfaceTexture transform matrix applied by the compositor
 - Debug APK workflow prepared for GitHub Actions
 
 ## Status
 
-Stage 2 capture path created. Next: render the captured OES texture into a simple 9:16 GPU compositor and then add the first URL overlay layer.
+Stage 3 GPU compositor created. Next: render the first URL/WebView overlay into the same GPU composition path without creating a touch-blocking system overlay window.
