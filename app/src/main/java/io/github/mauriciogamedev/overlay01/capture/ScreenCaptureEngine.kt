@@ -1,5 +1,6 @@
 package io.github.mauriciogamedev.overlay01.capture
 
+import android.content.Context
 import android.graphics.SurfaceTexture
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -14,6 +15,7 @@ import android.opengl.GLES20
 import android.os.Handler
 import android.os.HandlerThread
 import android.view.Surface
+import io.github.mauriciogamedev.overlay01.overlay.WebOverlayEngine
 import io.github.mauriciogamedev.overlay01.render.VerticalCompositor
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -21,16 +23,21 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * Captures the device display directly into an external OpenGL texture.
  *
- * No application-overlay window is created. The captured texture is composited
- * off-screen into a vertical 9:16 canvas, so touches remain owned by the game.
+ * No application-overlay window is created. The captured texture and optional
+ * URL overlay are composited off-screen into a vertical 9:16 canvas, so touches
+ * remain owned by the game.
  */
 class ScreenCaptureEngine(
+    context: Context,
     private val projection: MediaProjection,
     initialWidth: Int,
     initialHeight: Int,
     private val densityDpi: Int,
+    private val overlayUrl: String? = null,
     private val onError: (Throwable) -> Unit = {}
 ) {
+
+    private val appContext = context.applicationContext
 
     @Volatile
     private var width = initialWidth
@@ -40,7 +47,7 @@ class ScreenCaptureEngine(
 
     private val running = AtomicBoolean(false)
     private val frames = AtomicLong(0L)
-    private val textureTransform = FloatArray(16)
+    private val gameTextureTransform = FloatArray(16)
 
     private var thread: HandlerThread? = null
     private var handler: Handler? = null
@@ -49,11 +56,13 @@ class ScreenCaptureEngine(
     private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
     private var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
 
-    private var textureId = 0
-    private var surfaceTexture: SurfaceTexture? = null
-    private var inputSurface: Surface? = null
+    private var gameTextureId = 0
+    private var gameSurfaceTexture: SurfaceTexture? = null
+    private var gameInputSurface: Surface? = null
     private var virtualDisplay: VirtualDisplay? = null
+
     private var compositor: VerticalCompositor? = null
+    private var webOverlay: WebOverlayEngine? = null
 
     val frameCount: Long
         get() = frames.get()
@@ -74,7 +83,9 @@ class ScreenCaptureEngine(
                     outputWidth = OUTPUT_WIDTH,
                     outputHeight = OUTPUT_HEIGHT
                 ).also { it.initialize() }
+
                 createCaptureSurface()
+                createWebOverlayIfNeeded(captureHandler)
                 createVirtualDisplay(captureHandler)
             } catch (error: Throwable) {
                 running.set(false)
@@ -93,7 +104,7 @@ class ScreenCaptureEngine(
 
             width = newWidth
             height = newHeight
-            surfaceTexture?.setDefaultBufferSize(width, height)
+            gameSurfaceTexture?.setDefaultBufferSize(width, height)
             virtualDisplay?.resize(width, height, densityDpi)
         }
     }
@@ -182,10 +193,10 @@ class ScreenCaptureEngine(
     private fun createCaptureSurface() {
         val textures = IntArray(1)
         GLES20.glGenTextures(1, textures, 0)
-        textureId = textures[0]
-        check(textureId != 0) { "Unable to allocate capture texture" }
+        gameTextureId = textures[0]
+        check(gameTextureId != 0) { "Unable to allocate capture texture" }
 
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, gameTextureId)
         GLES20.glTexParameteri(
             GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
             GLES20.GL_TEXTURE_MIN_FILTER,
@@ -206,33 +217,66 @@ class ScreenCaptureEngine(
             GLES20.GL_TEXTURE_WRAP_T,
             GLES20.GL_CLAMP_TO_EDGE
         )
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
 
-        val captureTexture = SurfaceTexture(textureId).apply {
+        val captureTexture = SurfaceTexture(gameTextureId).apply {
             setDefaultBufferSize(width, height)
             setOnFrameAvailableListener({ texture ->
                 if (!running.get()) return@setOnFrameAvailableListener
                 try {
                     texture.updateTexImage()
-                    texture.getTransformMatrix(textureTransform)
-                    compositor?.render(
-                        externalTextureId = textureId,
-                        textureTransform = textureTransform,
-                        sourceWidth = width,
-                        sourceHeight = height
-                    )
-                    GLES20.glFlush()
-                    frames.incrementAndGet()
+                    texture.getTransformMatrix(gameTextureTransform)
+                    renderCompositeFrame()
                 } catch (error: Throwable) {
                     if (running.get()) onError(error)
                 }
             }, handler)
         }
-        surfaceTexture = captureTexture
-        inputSurface = Surface(captureTexture)
+        gameSurfaceTexture = captureTexture
+        gameInputSurface = Surface(captureTexture)
+    }
+
+    private fun createWebOverlayIfNeeded(captureHandler: Handler) {
+        val url = overlayUrl?.trim().orEmpty()
+        if (url.isBlank()) return
+
+        webOverlay = WebOverlayEngine(
+            context = appContext,
+            glHandler = captureHandler,
+            width = OUTPUT_WIDTH,
+            height = OUTPUT_HEIGHT,
+            densityDpi = densityDpi,
+            // Overlay failure must not kill the gameplay capture/live core.
+            onError = {}
+        ).also { it.initializeGl(url) }
+    }
+
+    private fun renderCompositeFrame() {
+        val renderer = compositor ?: return
+
+        webOverlay?.updateTextureIfNeeded()
+
+        renderer.renderGame(
+            externalTextureId = gameTextureId,
+            textureTransform = gameTextureTransform,
+            sourceWidth = width,
+            sourceHeight = height
+        )
+
+        val overlay = webOverlay
+        if (overlay != null && overlay.hasUsableFrame && overlay.externalTextureId != 0) {
+            renderer.renderOverlay(
+                externalTextureId = overlay.externalTextureId,
+                textureTransform = overlay.textureMatrix()
+            )
+        }
+
+        GLES20.glFlush()
+        frames.incrementAndGet()
     }
 
     private fun createVirtualDisplay(captureHandler: Handler) {
-        val targetSurface = checkNotNull(inputSurface)
+        val targetSurface = checkNotNull(gameInputSurface)
         virtualDisplay = projection.createVirtualDisplay(
             "Overlay01-Capture",
             width,
@@ -247,22 +291,25 @@ class ScreenCaptureEngine(
     }
 
     private fun releaseOnCaptureThread() {
-        runCatching { surfaceTexture?.setOnFrameAvailableListener(null) }
+        runCatching { gameSurfaceTexture?.setOnFrameAvailableListener(null) }
         runCatching { virtualDisplay?.release() }
         virtualDisplay = null
 
-        runCatching { inputSurface?.release() }
-        inputSurface = null
+        runCatching { gameInputSurface?.release() }
+        gameInputSurface = null
 
-        runCatching { surfaceTexture?.release() }
-        surfaceTexture = null
+        runCatching { gameSurfaceTexture?.release() }
+        gameSurfaceTexture = null
+
+        runCatching { webOverlay?.releaseGl() }
+        webOverlay = null
 
         runCatching { compositor?.release() }
         compositor = null
 
-        if (textureId != 0) {
-            runCatching { GLES20.glDeleteTextures(1, intArrayOf(textureId), 0) }
-            textureId = 0
+        if (gameTextureId != 0) {
+            runCatching { GLES20.glDeleteTextures(1, intArrayOf(gameTextureId), 0) }
+            gameTextureId = 0
         }
 
         if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
