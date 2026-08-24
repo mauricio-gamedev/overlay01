@@ -28,7 +28,7 @@ class RtmpPublisher(
     private var sps: ByteBuffer? = null
     private var pps: ByteBuffer? = null
 
-    private val client = RtmpClient(object : ConnectChecker {
+    private val connectChecker = object : ConnectChecker {
         override fun onConnectionStarted(url: String) {
             listener.onStateChanged("Connecting to live server…", false)
         }
@@ -63,15 +63,19 @@ class RtmpPublisher(
         override fun onAuthSuccess() {
             listener.onStateChanged("Live authentication accepted", connected.get())
         }
-    }).apply {
-        setVideoCodec(VideoCodec.H264)
-        setAudioCodec(AudioCodec.AAC)
-        setVideoResolution(VIDEO_WIDTH, VIDEO_HEIGHT)
-        setFps(VIDEO_FPS)
-        setAudioInfo(AUDIO_SAMPLE_RATE, false)
-        setReTries(RETRY_COUNT)
-        setLogs(false)
-        shouldFailOnRead = true
+    }
+
+    private val client: RtmpClient by lazy {
+        RtmpClient(connectChecker).apply {
+            setVideoCodec(VideoCodec.H264)
+            setAudioCodec(AudioCodec.AAC)
+            setVideoResolution(VIDEO_WIDTH, VIDEO_HEIGHT)
+            setFps(VIDEO_FPS)
+            setAudioInfo(AUDIO_SAMPLE_RATE, false)
+            setReTries(RETRY_COUNT)
+            setLogs(false)
+            shouldFailOnRead = true
+        }
     }
 
     val isConnected: Boolean
@@ -83,7 +87,7 @@ class RtmpPublisher(
 
     fun disconnect() {
         connected.set(false)
-        client.disconnect()
+        if (client.isStreaming) client.disconnect()
     }
 
     fun setVideoConfig(sps: ByteBuffer, pps: ByteBuffer?) {
@@ -93,13 +97,11 @@ class RtmpPublisher(
     }
 
     fun sendVideo(data: ByteBuffer, info: MediaCodec.BufferInfo) {
-        if (!connected.get()) return
-        client.sendVideo(data, info)
+        if (connected.get()) client.sendVideo(data, info)
     }
 
     fun sendAudio(data: ByteBuffer, info: MediaCodec.BufferInfo) {
-        if (!connected.get()) return
-        client.sendAudio(data, info)
+        if (connected.get()) client.sendAudio(data, info)
     }
 
     private fun pushVideoConfigIfReady() {
@@ -113,10 +115,10 @@ class RtmpPublisher(
 
     private fun cloneBuffer(source: ByteBuffer): ByteBuffer {
         val src = source.duplicate()
-        val copy = ByteBuffer.allocateDirect(src.remaining())
-        copy.put(src)
-        copy.flip()
-        return copy
+        return ByteBuffer.allocateDirect(src.remaining()).apply {
+            put(src)
+            flip()
+        }
     }
 
     companion object {
