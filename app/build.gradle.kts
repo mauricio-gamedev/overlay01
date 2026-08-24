@@ -4,7 +4,7 @@ plugins {
 
 android {
     namespace = "io.github.mauriciogamedev.overlay01"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "io.github.mauriciogamedev.overlay01"
