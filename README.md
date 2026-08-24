@@ -41,6 +41,8 @@ Overlay01 does not place a `TYPE_APPLICATION_OVERLAY` window over the game. Web 
 - Native Android app with no Compose dependency
 - URL overlay preview through a hardware-accelerated WebView
 - JavaScript and DOM storage enabled for interactive overlay pages
+- Overlay URL persisted locally after a successful load
+- Persistent `Fix overlay` control that locks overlay editing and restores after reopening the app
 - MediaProjection permission flow wired from the activity
 - Dedicated `mediaProjection` foreground service lifecycle
 - Real `VirtualDisplay` capture session
