@@ -77,7 +77,9 @@ class CaptureService : Service() {
 
         try {
             val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            val projection = manager.getMediaProjection(resultCode, resultData).also {
+            val projection = checkNotNull(manager.getMediaProjection(resultCode, resultData)) {
+                "Unable to create MediaProjection session"
+            }.also {
                 it.registerCallback(callback, mainHandler)
             }
             mediaProjection = projection
