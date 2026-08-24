@@ -19,21 +19,32 @@ import io.github.mauriciogamedev.overlay01.service.OverlayService
 
 class MainActivity : Activity() {
 
-    private lateinit var overlayUrl: EditText
-    private lateinit var lockOverlay: CheckBox
-    private lateinit var permissionButton: Button
-    private lateinit var statusText: TextView
-    private lateinit var sizeLabel: TextView
-    private lateinit var sizeSeekBar: SeekBar
+    private data class SlotUi(
+        val index: Int,
+        val enabled: CheckBox,
+        val url: EditText,
+        val scaleLabel: TextView,
+        val scale: SeekBar,
+        val xLabel: TextView,
+        val x: SeekBar,
+        val yLabel: TextView,
+        val y: SeekBar,
+        val lock: CheckBox,
+        val reset: Button
+    )
 
     private val preferences by lazy {
         getSharedPreferences(OverlayService.PREFS_NAME, MODE_PRIVATE)
     }
 
+    private val slotUis = mutableListOf<SlotUi>()
+    private lateinit var permissionButton: Button
+    private lateinit var statusText: TextView
     private var startAfterOverlayPermission = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        migrateLegacySettings()
         setContentView(buildUi())
     }
 
@@ -43,7 +54,7 @@ class MainActivity : Activity() {
 
         if (startAfterOverlayPermission && Settings.canDrawOverlays(this)) {
             startAfterOverlayPermission = false
-            startOrUpdateOverlay()
+            applyAllOverlays()
         }
     }
 
@@ -51,9 +62,6 @@ class MainActivity : Activity() {
         val density = resources.displayMetrics.density
         val pad = (18 * density).toInt()
         val gap = (10 * density).toInt()
-        val savedScale = preferences
-            .getInt(OverlayService.PREF_SCALE_PERCENT, OverlayService.DEFAULT_SCALE_PERCENT)
-            .coerceIn(OverlayService.MIN_SCALE_PERCENT, OverlayService.MAX_SCALE_PERCENT)
 
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -68,7 +76,7 @@ class MainActivity : Activity() {
         })
 
         content.addView(TextView(this).apply {
-            text = "Cole o link da overlay e ative. Ela fica por cima do jogo sem bloquear nenhum toque."
+            text = "Agora você pode usar 2 overlays independentes, redimensionar e posicionar cada uma."
             textSize = 15f
             setTextColor(Color.LTGRAY)
             setPadding(0, gap, 0, gap)
@@ -81,72 +89,14 @@ class MainActivity : Activity() {
         }
         content.addView(statusText)
 
-        overlayUrl = EditText(this).apply {
-            hint = "https://... link do TikFinity"
-            setSingleLine(true)
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
-            setText(preferences.getString(OverlayService.PREF_URL, ""))
-        }
-        content.addView(overlayUrl)
-
-        sizeLabel = TextView(this).apply {
-            text = "Tamanho da overlay: $savedScale%"
-            textSize = 14f
-            setTextColor(Color.WHITE)
-            setPadding(0, gap, 0, 0)
-        }
-        content.addView(sizeLabel)
-
-        sizeSeekBar = SeekBar(this).apply {
-            max = OverlayService.MAX_SCALE_PERCENT - OverlayService.MIN_SCALE_PERCENT
-            progress = savedScale - OverlayService.MIN_SCALE_PERCENT
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    val percent = progress + OverlayService.MIN_SCALE_PERCENT
-                    sizeLabel.text = "Tamanho da overlay: $percent%"
-                    if (fromUser) {
-                        preferences.edit().putInt(OverlayService.PREF_SCALE_PERCENT, percent).apply()
-                    }
-                }
-
-                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-
-                override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                    if (!lockOverlay.isChecked) applyResizeToActiveOverlay()
-                }
-            })
-        }
-        content.addView(sizeSeekBar)
-
-        content.addView(Button(this).apply {
-            text = "Restaurar tamanho 100%"
-            setOnClickListener {
-                if (lockOverlay.isChecked) return@setOnClickListener
-                sizeSeekBar.progress = OverlayService.MAX_SCALE_PERCENT - OverlayService.MIN_SCALE_PERCENT
-                preferences.edit()
-                    .putInt(OverlayService.PREF_SCALE_PERCENT, OverlayService.MAX_SCALE_PERCENT)
-                    .apply()
-                applyResizeToActiveOverlay()
-            }
-        })
-
-        lockOverlay = CheckBox(this).apply {
-            text = "Fixar configuração"
-            setTextColor(Color.WHITE)
-            isChecked = preferences.getBoolean(OverlayService.PREF_LOCKED, false)
-            setOnCheckedChangeListener { _, checked ->
-                preferences.edit().putBoolean(OverlayService.PREF_LOCKED, checked).apply()
-                applyLockState(checked)
-            }
-        }
-        content.addView(lockOverlay)
+        content.addView(buildSlotSection(1, gap))
+        content.addView(buildSlotSection(2, gap))
 
         content.addView(TextView(this).apply {
-            text = "Touch-through fica sempre ativo: tocar em cima da overlay continua controlando o jogo."
+            text = "Touch-through continua sempre ativo: as duas overlays aparecem por cima, mas seus toques continuam indo para o jogo."
             textSize = 13f
             setTextColor(Color.GRAY)
-            setPadding(0, 0, 0, gap)
+            setPadding(0, gap, 0, gap)
         })
 
         permissionButton = Button(this).apply {
@@ -156,23 +106,22 @@ class MainActivity : Activity() {
         content.addView(permissionButton)
 
         content.addView(Button(this).apply {
-            text = "Ativar / atualizar overlay"
-            setOnClickListener { startOrUpdateOverlay() }
+            text = "Aplicar overlays"
+            setOnClickListener { applyAllOverlays() }
         })
 
         content.addView(Button(this).apply {
-            text = "Desativar overlay"
-            setOnClickListener { stopOverlay() }
+            text = "Desativar todas"
+            setOnClickListener { stopAllOverlays() }
         })
 
         content.addView(TextView(this).apply {
-            text = "O app mantém apenas uma WebView transparente e um serviço persistente. Mudanças de tamanho não recarregam o layout."
+            text = "O app usa uma única janela touch-through com até duas WebViews. Mover ou redimensionar não recarrega os layouts."
             textSize = 12f
             setTextColor(Color.GRAY)
             setPadding(0, gap, 0, 0)
         })
 
-        applyLockState(lockOverlay.isChecked)
         updateUiState()
 
         return ScrollView(this).apply {
@@ -181,16 +130,261 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun applyLockState(locked: Boolean) {
-        overlayUrl.isEnabled = !locked
-        overlayUrl.alpha = if (locked) 0.65f else 1f
-        sizeSeekBar.isEnabled = !locked
-        sizeSeekBar.alpha = if (locked) 0.65f else 1f
+    private fun buildSlotSection(index: Int, gap: Int): View {
+        val savedScale = preferences
+            .getInt(OverlayService.prefScale(index), OverlayService.DEFAULT_SCALE_PERCENT)
+            .coerceIn(OverlayService.MIN_SCALE_PERCENT, OverlayService.MAX_SCALE_PERCENT)
+        val savedX = preferences
+            .getInt(OverlayService.prefX(index), OverlayService.DEFAULT_POSITION_PERCENT)
+            .coerceIn(OverlayService.MIN_POSITION_PERCENT, OverlayService.MAX_POSITION_PERCENT)
+        val savedY = preferences
+            .getInt(OverlayService.prefY(index), OverlayService.DEFAULT_POSITION_PERCENT)
+            .coerceIn(OverlayService.MIN_POSITION_PERCENT, OverlayService.MAX_POSITION_PERCENT)
+
+        val section = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, gap, 0, gap * 2)
+        }
+
+        section.addView(TextView(this).apply {
+            text = "Overlay $index"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+        })
+
+        val enabled = CheckBox(this).apply {
+            text = "Mostrar Overlay $index"
+            setTextColor(Color.WHITE)
+            isChecked = preferences.getBoolean(OverlayService.prefEnabled(index), false)
+        }
+        section.addView(enabled)
+
+        val url = EditText(this).apply {
+            hint = "https://... link da Overlay $index"
+            setSingleLine(true)
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            setText(preferences.getString(OverlayService.prefUrl(index), ""))
+        }
+        section.addView(url)
+
+        val scaleLabel = TextView(this).apply {
+            text = "Tamanho: $savedScale%"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setPadding(0, gap, 0, 0)
+        }
+        section.addView(scaleLabel)
+
+        val scale = SeekBar(this).apply {
+            max = OverlayService.MAX_SCALE_PERCENT - OverlayService.MIN_SCALE_PERCENT
+            progress = savedScale - OverlayService.MIN_SCALE_PERCENT
+        }
+        section.addView(scale)
+
+        val xLabel = TextView(this).apply {
+            text = "Posição X: ${formatPosition(savedX)}"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setPadding(0, gap, 0, 0)
+        }
+        section.addView(xLabel)
+
+        val x = SeekBar(this).apply {
+            max = OverlayService.MAX_POSITION_PERCENT - OverlayService.MIN_POSITION_PERCENT
+            progress = savedX - OverlayService.MIN_POSITION_PERCENT
+        }
+        section.addView(x)
+
+        val yLabel = TextView(this).apply {
+            text = "Posição Y: ${formatPosition(savedY)}"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setPadding(0, gap, 0, 0)
+        }
+        section.addView(yLabel)
+
+        val y = SeekBar(this).apply {
+            max = OverlayService.MAX_POSITION_PERCENT - OverlayService.MIN_POSITION_PERCENT
+            progress = savedY - OverlayService.MIN_POSITION_PERCENT
+        }
+        section.addView(y)
+
+        val reset = Button(this).apply {
+            text = "Centralizar e restaurar tamanho"
+        }
+        section.addView(reset)
+
+        val lock = CheckBox(this).apply {
+            text = "Fixar Overlay $index"
+            setTextColor(Color.WHITE)
+            isChecked = preferences.getBoolean(OverlayService.prefLocked(index), false)
+        }
+        section.addView(lock)
+
+        val slot = SlotUi(index, enabled, url, scaleLabel, scale, xLabel, x, yLabel, y, lock, reset)
+        slotUis += slot
+
+        scale.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val value = progress + OverlayService.MIN_SCALE_PERCENT
+                scaleLabel.text = "Tamanho: $value%"
+                if (fromUser) saveSlot(slot)
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = applyLiveIfRunning(slot)
+        })
+
+        x.setOnSeekBarChangeListener(positionListener(slot, xLabel, true))
+        y.setOnSeekBarChangeListener(positionListener(slot, yLabel, false))
+
+        enabled.setOnCheckedChangeListener { _, _ -> saveSlot(slot) }
+
+        lock.setOnCheckedChangeListener { _, checked ->
+            preferences.edit().putBoolean(OverlayService.prefLocked(index), checked).apply()
+            applyLockState(slot, checked)
+        }
+
+        reset.setOnClickListener {
+            if (lock.isChecked) return@setOnClickListener
+            scale.progress = OverlayService.MAX_SCALE_PERCENT - OverlayService.MIN_SCALE_PERCENT
+            x.progress = -OverlayService.MIN_POSITION_PERCENT
+            y.progress = -OverlayService.MIN_POSITION_PERCENT
+            saveSlot(slot)
+            applyLiveIfRunning(slot)
+        }
+
+        applyLockState(slot, lock.isChecked)
+        return section
     }
 
-    private fun updateUiState() {
+    private fun positionListener(
+        slot: SlotUi,
+        label: TextView,
+        isX: Boolean
+    ): SeekBar.OnSeekBarChangeListener {
+        return object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val value = progress + OverlayService.MIN_POSITION_PERCENT
+                label.text = if (isX) {
+                    "Posição X: ${formatPosition(value)}"
+                } else {
+                    "Posição Y: ${formatPosition(value)}"
+                }
+                if (fromUser) saveSlot(slot)
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = applyLiveIfRunning(slot)
+        }
+    }
+
+    private fun applyLockState(slot: SlotUi, locked: Boolean) {
+        val alpha = if (locked) 0.6f else 1f
+        listOf<View>(slot.enabled, slot.url, slot.scale, slot.x, slot.y, slot.reset).forEach {
+            it.isEnabled = !locked
+            it.alpha = alpha
+        }
+    }
+
+    private fun formatPosition(value: Int): String {
+        return when {
+            value > 0 -> "+$value%"
+            else -> "$value%"
+        }
+    }
+
+    private fun scalePercent(slot: SlotUi): Int {
+        return (slot.scale.progress + OverlayService.MIN_SCALE_PERCENT)
+            .coerceIn(OverlayService.MIN_SCALE_PERCENT, OverlayService.MAX_SCALE_PERCENT)
+    }
+
+    private fun positionPercent(seekBar: SeekBar): Int {
+        return (seekBar.progress + OverlayService.MIN_POSITION_PERCENT)
+            .coerceIn(OverlayService.MIN_POSITION_PERCENT, OverlayService.MAX_POSITION_PERCENT)
+    }
+
+    private fun saveSlot(slot: SlotUi) {
+        preferences.edit()
+            .putBoolean(OverlayService.prefEnabled(slot.index), slot.enabled.isChecked)
+            .putString(OverlayService.prefUrl(slot.index), slot.url.text.toString().trim())
+            .putBoolean(OverlayService.prefLocked(slot.index), slot.lock.isChecked)
+            .putInt(OverlayService.prefScale(slot.index), scalePercent(slot))
+            .putInt(OverlayService.prefX(slot.index), positionPercent(slot.x))
+            .putInt(OverlayService.prefY(slot.index), positionPercent(slot.y))
+            .apply()
+    }
+
+    private fun saveAllSlots() {
+        slotUis.forEach(::saveSlot)
+    }
+
+    private fun applyAllOverlays() {
+        saveAllSlots()
+
+        for (slot in slotUis) {
+            if (slot.enabled.isChecked && !isValidHttpsUrl(slot.url.text.toString())) {
+                Toast.makeText(
+                    this,
+                    "Overlay ${slot.index}: cole um link HTTPS válido",
+                    Toast.LENGTH_SHORT
+                ).show()
+                return
+            }
+        }
+
+        if (slotUis.none { it.enabled.isChecked }) {
+            stopAllOverlays()
+            return
+        }
+
+        if (!Settings.canDrawOverlays(this)) {
+            startAfterOverlayPermission = true
+            requestOverlayPermission()
+            return
+        }
+
+        startForegroundService(
+            Intent(this, OverlayService::class.java)
+                .setAction(OverlayService.ACTION_APPLY)
+        )
+        updateUiState(activeOverride = slotUis.count { it.enabled.isChecked })
+    }
+
+    private fun applyLiveIfRunning(slot: SlotUi) {
+        if (slot.lock.isChecked) return
+        saveSlot(slot)
+        if (!Settings.canDrawOverlays(this)) return
+        if (slotUis.none { it.enabled.isChecked }) return
+        if (slot.enabled.isChecked && !isValidHttpsUrl(slot.url.text.toString())) return
+
+        startForegroundService(
+            Intent(this, OverlayService::class.java)
+                .setAction(OverlayService.ACTION_APPLY)
+        )
+    }
+
+    private fun stopAllOverlays() {
+        slotUis.forEach {
+            it.enabled.isChecked = false
+            saveSlot(it)
+        }
+
+        startService(
+            Intent(this, OverlayService::class.java)
+                .setAction(OverlayService.ACTION_STOP)
+        )
+        statusText.text = "Overlays desativadas"
+    }
+
+    private fun updateUiState(activeOverride: Int? = null) {
+        if (!::permissionButton.isInitialized || !::statusText.isInitialized) return
+
         val allowed = Settings.canDrawOverlays(this)
-        val active = preferences.getBoolean(OverlayService.PREF_VISIBLE, false)
+        val activeCount = activeOverride ?: (1..2).count {
+            preferences.getBoolean(OverlayService.prefEnabled(it), false)
+        }
 
         permissionButton.isEnabled = !allowed
         permissionButton.text = if (allowed) {
@@ -201,8 +395,9 @@ class MainActivity : Activity() {
 
         statusText.text = when {
             !allowed -> "Falta apenas a permissão de sobreposição"
-            active -> "Overlay ativa · pode abrir o jogo"
-            else -> "Pronto para ativar"
+            activeCount == 2 -> "2 overlays configuradas · pode abrir o jogo"
+            activeCount == 1 -> "1 overlay configurada · pode abrir o jogo"
+            else -> "Pronto para configurar"
         }
     }
 
@@ -220,76 +415,54 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun currentScalePercent(): Int {
-        return (sizeSeekBar.progress + OverlayService.MIN_SCALE_PERCENT)
-            .coerceIn(OverlayService.MIN_SCALE_PERCENT, OverlayService.MAX_SCALE_PERCENT)
+    private fun isValidHttpsUrl(raw: String): Boolean {
+        val uri = runCatching { Uri.parse(raw.trim()) }.getOrNull() ?: return false
+        return uri.scheme?.lowercase() == "https" && !uri.host.isNullOrBlank()
     }
 
-    private fun startOrUpdateOverlay() {
-        val raw = overlayUrl.text.toString().trim()
-        val uri = runCatching { Uri.parse(raw) }.getOrNull()
+    private fun migrateLegacySettings() {
+        if (preferences.getBoolean(OverlayService.PREF_MIGRATED_V4, false)) return
 
-        if (raw.isBlank() || uri?.scheme?.lowercase() != "https" || uri.host.isNullOrBlank()) {
-            Toast.makeText(
-                this,
-                "Cole um link HTTPS válido da overlay",
-                Toast.LENGTH_SHORT
-            ).show()
-            return
+        val editor = preferences.edit()
+        if (!preferences.contains(OverlayService.prefUrl(1))) {
+            editor.putString(
+                OverlayService.prefUrl(1),
+                preferences.getString(OverlayService.LEGACY_PREF_URL, "") ?: ""
+            )
+            editor.putBoolean(
+                OverlayService.prefEnabled(1),
+                preferences.getBoolean(OverlayService.LEGACY_PREF_VISIBLE, false)
+            )
+            editor.putBoolean(
+                OverlayService.prefLocked(1),
+                preferences.getBoolean(OverlayService.LEGACY_PREF_LOCKED, false)
+            )
+            editor.putInt(
+                OverlayService.prefScale(1),
+                preferences.getInt(
+                    OverlayService.LEGACY_PREF_SCALE,
+                    OverlayService.DEFAULT_SCALE_PERCENT
+                )
+            )
+            editor.putInt(
+                OverlayService.prefX(1),
+                OverlayService.DEFAULT_POSITION_PERCENT
+            )
+            editor.putInt(
+                OverlayService.prefY(1),
+                OverlayService.DEFAULT_POSITION_PERCENT
+            )
         }
 
-        val scalePercent = currentScalePercent()
-        preferences.edit()
-            .putString(OverlayService.PREF_URL, raw)
-            .putInt(OverlayService.PREF_SCALE_PERCENT, scalePercent)
-            .apply()
-
-        if (!Settings.canDrawOverlays(this)) {
-            startAfterOverlayPermission = true
-            requestOverlayPermission()
-            return
+        if (!preferences.contains(OverlayService.prefUrl(2))) {
+            editor.putString(OverlayService.prefUrl(2), "")
+            editor.putBoolean(OverlayService.prefEnabled(2), false)
+            editor.putBoolean(OverlayService.prefLocked(2), false)
+            editor.putInt(OverlayService.prefScale(2), OverlayService.DEFAULT_SCALE_PERCENT)
+            editor.putInt(OverlayService.prefX(2), OverlayService.DEFAULT_POSITION_PERCENT)
+            editor.putInt(OverlayService.prefY(2), OverlayService.DEFAULT_POSITION_PERCENT)
         }
 
-        val action = if (preferences.getBoolean(OverlayService.PREF_VISIBLE, false)) {
-            OverlayService.ACTION_UPDATE
-        } else {
-            OverlayService.ACTION_SHOW
-        }
-
-        startForegroundService(
-            Intent(this, OverlayService::class.java)
-                .setAction(action)
-                .putExtra(OverlayService.EXTRA_URL, raw)
-                .putExtra(OverlayService.EXTRA_SCALE_PERCENT, scalePercent)
-        )
-
-        preferences.edit().putBoolean(OverlayService.PREF_VISIBLE, true).apply()
-        statusText.text = "Overlay ativa · pode abrir o jogo"
-    }
-
-    private fun applyResizeToActiveOverlay() {
-        val scalePercent = currentScalePercent()
-        preferences.edit().putInt(OverlayService.PREF_SCALE_PERCENT, scalePercent).apply()
-
-        if (!Settings.canDrawOverlays(this) ||
-            !preferences.getBoolean(OverlayService.PREF_VISIBLE, false)
-        ) {
-            return
-        }
-
-        startService(
-            Intent(this, OverlayService::class.java)
-                .setAction(OverlayService.ACTION_RESIZE)
-                .putExtra(OverlayService.EXTRA_SCALE_PERCENT, scalePercent)
-        )
-    }
-
-    private fun stopOverlay() {
-        startService(
-            Intent(this, OverlayService::class.java)
-                .setAction(OverlayService.ACTION_STOP)
-        )
-        preferences.edit().putBoolean(OverlayService.PREF_VISIBLE, false).apply()
-        statusText.text = "Overlay desativada"
+        editor.putBoolean(OverlayService.PREF_MIGRATED_V4, true).apply()
     }
 }
